@@ -1,31 +1,35 @@
 import React, { useState } from 'react';
 import { usePortfolioStore } from '../store/portfolioStore';
-import { Wallet, Search } from 'lucide-react';
+import { Wallet, Search, AlertTriangle } from 'lucide-react';
 
 export const WalletInput: React.FC = () => {
-  const { wallets, setWalletAddress, clearPortfolio } = usePortfolioStore();
+  const { wallets, setWalletAddress, clearPortfolio, error, isLoading } = usePortfolioStore();
   
   const [solInput, setSolInput] = useState(wallets.solana);
   const [baseInput, setBaseInput] = useState(wallets.base);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (solInput.trim() !== wallets.solana) {
-      setWalletAddress('solana', solInput.trim());
+    // On nettoie les espaces vides accidentels
+    const cleanSol = solInput.trim();
+    const cleanBase = baseInput.trim();
+
+    if (cleanSol !== wallets.solana) {
+      setWalletAddress('solana', cleanSol);
     }
-    if (baseInput.trim() !== wallets.base) {
-      setWalletAddress('base', baseInput.trim());
+    if (cleanBase !== wallets.base) {
+      setWalletAddress('base', cleanBase);
     }
   };
 
   const hasActiveWallets = wallets.solana || wallets.base;
 
   return (
-    <div className="w-full bg-slate-950 border border-slate-900 rounded-2xl p-6 shadow-xl">
+    <div className="w-full bg-slate-950 border border-slate-900 rounded-2xl p-6 shadow-xl font-mono">
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-2">
           <Wallet className="h-4 w-4 text-purple-400" />
-          <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider font-mono">
+          <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
             Scanner automatique de Portefeuille Réel
           </h2>
         </div>
@@ -36,14 +40,25 @@ export const WalletInput: React.FC = () => {
               setBaseInput('');
               clearPortfolio();
             }}
-            className="text-[10px] font-mono text-rose-500 hover:underline tracking-tight"
+            className="text-[10px] text-rose-500 hover:underline tracking-tight"
           >
             DECONNECTER LES WALLETS
           </button>
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 font-mono">
+      {/* ZONE D'AFFICHAGE DE L'ERREUR DE LA BLOCKCHAIN */}
+      {error && (
+        <div className="mb-4 p-3.5 bg-rose-950/40 border border-rose-900/50 rounded-xl flex items-start gap-2.5 text-xs text-rose-300">
+          <AlertTriangle className="h-4 w-4 text-rose-400 mt-0.5 flex-shrink-0" />
+          <div>
+            <span className="font-bold uppercase block text-[10px] text-rose-400 tracking-wide mb-0.5">Erreur Réseau Blockchain :</span>
+            {error}
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] text-slate-500 uppercase tracking-widest pl-1">Adresse Solana</label>
@@ -77,10 +92,10 @@ export const WalletInput: React.FC = () => {
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-slate-100 px-6 py-2.5 rounded-xl text-xs font-bold tracking-wider shadow-lg"
+            disabled={isLoading}
+            className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-slate-100 px-6 py-2.5 rounded-xl text-xs font-bold tracking-wider shadow-lg disabled:opacity-50"
           >
-            <Search className="h-3.5 w-3.5" />
-            LANCER LE SCAN LIVE
+            {isLoading ? 'SCAN EN COURS...' : 'LANCER LE SCAN LIVE'}
           </button>
         </div>
       </form>
