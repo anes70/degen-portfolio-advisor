@@ -2,6 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Token, Network } from '../types/token';
 
+// ========================================================
+// COLLE TA CLÉ ALCHEMY UNIQUE ICI ENTRE LES GUILLEMETS
+// (La même clé fonctionne pour Solana et Base)
+// ========================================================
+const ALCHEMY_API_KEY = "xM4MRu8tn-dy42RBFBkDU";
+// ========================================================
+
 interface PortfolioState {
   wallets: Record<Network, string>;
   tokens: Token[];
@@ -48,23 +55,24 @@ export const usePortfolioStore = create<PortfolioState>()(
         set({ isLoading: true, error: null });
         let scannedTokens: { mint: string; balance: number; network: Network; symbol: string }[] = [];
 
-        const SOLANA_RPC = 'https://rpc.ankr.com/solana';
-        const BASE_RPC = 'https://rpc.ankr.com/base';
+        // Ta clé unique est injectée automatiquement dans les deux routes privées d'Alchemy
+        const SOLANA_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+        const BASE_RPC = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
 
         try {
-          // ==================== VALIDATION DU FORMAT DES ADRESSES ====================
           if (wallets.solana && (wallets.solana.length < 32 || wallets.solana.length > 44)) {
-            set({ error: "L'adresse Solana entrée n'a pas un format valide (doit faire entre 32 et 44 caractères).", isLoading: false });
+            set({ error: "L'adresse Solana n'est pas valide (vérifie la longueur).", isLoading: false });
             return;
           }
           if (wallets.base && (!wallets.base.startsWith('0x') || wallets.base.length !== 42)) {
-            set({ error: "L'adresse Base entrée n'est pas valide (doit commencer par 0x et faire 42 caractères).", isLoading: false });
+            set({ error: "L'adresse Base n'est pas valide (doit commencer par 0x).", isLoading: false });
             return;
           }
 
-          // ==================== 1. SCAN SOLANA ====================
+          // ==================== 1. SCAN SOLANA AVEC TA CLÉ UNIQUE ====================
           if (wallets.solana) {
             try {
+              // Solde SOL Natif
               const solBalanceRes = await fetch(SOLANA_RPC, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -73,20 +81,21 @@ export const usePortfolioStore = create<PortfolioState>()(
               const solBalanceData = await solBalanceRes.json();
               
               if (solBalanceData.error) {
-                set({ error: `Solana RPC dit : ${solBalanceData.error.message}`, isLoading: false });
+                set({ error: `Alchemy Solana refuse la clé : ${solBalanceData.error.message}`, isLoading: false });
                 return;
               }
 
               const lamports = solBalanceData.result?.value || 0;
               if (lamports > 0) {
                 scannedTokens.push({
-                  mint: 'So11111111111111111111111111111111111111112',
+                  mint: 'So11111111111111111111111111111111111111112', // Wrapped SOL pour DexScreener
                   balance: lamports / 1000000000,
                   network: 'solana',
                   symbol: 'SOL'
                 });
               }
 
+              // Liste des tokens SPL secondaires
               const splRes = await fetch(SOLANA_RPC, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -104,22 +113,23 @@ export const usePortfolioStore = create<PortfolioState>()(
                 });
               }
             } catch (e) {
-              console.error(e);
+              console.error('Erreur RPC Solana:', e);
             }
           }
 
-          // ==================== 2. SCAN BASE ====================
+          // ==================== 2. SCAN BASE AVEC TA CLÉ UNIQUE ====================
           if (wallets.base) {
             try {
+              // Solde ETH Natif sur Base
               const ethBalanceRes = await fetch(BASE_RPC, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'eth_getBalance', params: [wallets.base, 'latest'] })
               });
               const ethBalanceData = await ethBalanceRes.json();
-              
+
               if (ethBalanceData.error) {
-                set({ error: `Base RPC dit : ${ethBalanceData.error.message}`, isLoading: false });
+                set({ error: `Alchemy Base refuse la clé : ${ethBalanceData.error.message}`, isLoading: false });
                 return;
               }
 
@@ -127,7 +137,7 @@ export const usePortfolioStore = create<PortfolioState>()(
                 const wei = parseInt(ethBalanceData.result, 16);
                 if (wei > 0) {
                   scannedTokens.push({
-                    mint: '0x4200000000000000000000000000000000000006',
+                    mint: '0x4200000000000000000000000000000000000006', // Wrapped ETH sur Base
                     balance: wei / 1e18,
                     network: 'base',
                     symbol: 'ETH'
@@ -135,6 +145,7 @@ export const usePortfolioStore = create<PortfolioState>()(
                 }
               }
 
+              // Scan des jetons ERC-20 via l'API ouverte de Blockscout
               const tokenListRes = await fetch(`https://base.blockscout.com/api/v2/addresses/${wallets.base}/token-balances`);
               if (tokenListRes.ok) {
                 const tokenListData = await tokenListRes.json();
@@ -150,18 +161,18 @@ export const usePortfolioStore = create<PortfolioState>()(
                 }
               }
             } catch (e) {
-              console.error(e);
+              console.error('Erreur RPC Base:', e);
             }
           }
 
           if (scannedTokens.length === 0) {
-            set({ tokens: [], isLoading: false, error: "Scan réussi mais aucun jeton trouvé avec de la liquidité sur ce portefeuille." });
+            set({ tokens: [], isLoading: false, error: "Aucun jeton actif avec liquidité détecté sur ces portefeuilles." });
             return;
           }
 
-          // ==================== 3. ENRICHISSEMENT DEXSCREENER ====================
+          // ==================== 3. SYNCHRO DEXSCREENER LIVE ====================
           const uniqueTokens = scannedTokens.filter((v, i, a) => a.findIndex(t => t.mint === v.mint) === i);
-          const mintsList = uniqueTokens.map(t => t.mint).slice(0, 30).join(','); // Limite aux 30 premiers jetons
+          const mintsList = uniqueTokens.map(t => t.mint).slice(0, 30).join(',');
           
           const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintsList}`);
           const dexData = await dexRes.json();
@@ -205,7 +216,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           set({ tokens: finalTokens, isLoading: false, error: null });
 
         } catch (err) {
-          set({ error: "Le serveur de la blockchain refuse de répondre. Réessayez avec une adresse valide.", isLoading: false });
+          set({ error: "Erreur de connexion globale aux API de nœuds.", isLoading: false });
         }
       },
 
