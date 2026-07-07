@@ -18,10 +18,7 @@ interface PortfolioState {
 export const usePortfolioStore = create<PortfolioState>()(
   persist(
     (set, get) => ({
-      wallets: {
-        solana: '',
-        base: '',
-      },
+      wallets: { solana: '', base: '' },
       tokens: [],
       isLoading: false,
       error: null,
@@ -51,38 +48,57 @@ export const usePortfolioStore = create<PortfolioState>()(
         set({ isLoading: true, error: null });
 
         try {
-          await new Promise((resolve) => setTimeout(resolve, 1200));
+          let baseTokens = [];
+          if (wallets.solana) baseTokens = [...baseTokens, ...getMockWalletAssets(wallets.solana, 'solana')];
+          if (wallets.base) baseTokens = [...baseTokens, ...getMockWalletAssets(wallets.base, 'base')];
 
-          let fetchedTokens: Token[] = [];
-
-          if (wallets.solana) {
-            const solAssets = getMockWalletAssets(wallets.solana, 'solana');
-            fetchedTokens = [...fetchedTokens, ...solAssets];
-          }
-          if (wallets.base) {
-            const baseAssets = getMockWalletAssets(wallets.base, 'base');
-            fetchedTokens = [...fetchedTokens, ...baseAssets];
+          if (baseTokens.length === 0) {
+            set({ tokens: [], isLoading: false });
+            return;
           }
 
-          const finalTokens = fetchedTokens.map((newToken) => {
-            const existingToken = currentTokens.find((t) => t.id === newToken.id);
-            return existingToken
-              ? { ...newToken, entryPrice: existingToken.entryPrice }
-              : newToken;
+          // Extraction des adresses de contract pour interroger DexScreener
+          const mints = baseTokens.map(t => t.mintAddress).join(',');
+          const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mints}`);
+          const data = await response.json();
+
+          const updatedTokens = baseTokens.map((token) => {
+            // Trouver les vraies données live correspondantes sur DexScreener
+            const pair = data.pairs?.find((p: any) => p.baseToken.address.toLowerCase() === token.mintAddress.toLowerCase());
+            const existingToken = currentTokens.find((t) => t.id === token.id);
+            const entryPrice = existingToken ? existingToken.entryPrice : token.entryPrice;
+
+            if (pair) {
+              return {
+                ...token,
+                entryPrice,
+                marketData: {
+                  currentPrice: parseFloat(pair.priceUsd) || token.marketData.currentPrice,
+                  volume24h: pair.volume?.h24 || token.marketData.volume24h,
+                  volumeChange1h: pair.priceChange?.h1 || 0,
+                  liquidity: pair.liquidity?.usd || token.marketData.liquidity,
+                  ath: Math.max(parseFloat(pair.priceUsd) || 0, token.marketData.ath),
+                  holderCount: token.marketData.holderCount,
+                  top10HolderShare: token.marketData.top10HolderShare,
+                  ageInDays: token.marketData.ageInDays,
+                  txCount24h: pair.txns?.h24?.buys + pair.txns?.h24?.sells || token.marketData.txCount24h,
+                  githubCommits30d: token.marketData.githubCommits30d,
+                  socialSentimentScore: token.marketData.socialSentimentScore,
+                  rugPullRiskScore: token.marketData.rugPullRiskScore
+                }
+              };
+            }
+            return { ...token, entryPrice };
           });
 
-          set({ tokens: finalTokens, isLoading: false });
+          set({ tokens: updatedTokens, isLoading: false });
         } catch (err: any) {
-          set({ error: err.message || 'Erreur de chargement', isLoading: false });
+          set({ error: 'Impossible de synchroniser les prix live', isLoading: false });
         }
       },
 
       clearPortfolio: () => {
-        set({
-          wallets: { solana: '', base: '' },
-          tokens: [],
-          error: null,
-        });
+        set({ wallets: { solana: '', base: '' }, tokens: [], error: null });
       },
     }),
     {
@@ -91,14 +107,11 @@ export const usePortfolioStore = create<PortfolioState>()(
         wallets: state.wallets,
         tokens: state.tokens.map(t => ({ id: t.id, entryPrice: t.entryPrice }))
       }),
-      merge: (persistedState: any, currentState) => {
-        const wallets = persistedState?.wallets || currentState.wallets;
-        return {
-          ...currentState,
-          wallets,
-          tokens: [] 
-        };
-      }
+      merge: (persistedState: any, currentState) => ({
+        ...currentState,
+        wallets: persistedState?.wallets || currentState.wallets,
+        tokens: []
+      })
     }
   )
 );
