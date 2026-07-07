@@ -2,7 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Token, Network } from '../types/token';
 
-const ALCHEMY_API_KEY = "xM4MRu8tn-dy42RBFBkDU";
+// ========================================================
+// RECOPIE TES DEUX CLÉS ALCHEMY DISTINCTES ICI
+// ========================================================
+const ALCHEMY_SOLANA_KEY = "p4VwvqxWwBmS2d0Qq6_ct";
+const ALCHEMY_BASE_KEY   = "_dJrQehMB7TYeu11Ja894";
+// ========================================================
 
 interface PortfolioState {
   wallets: Record<Network, string>;
@@ -50,8 +55,8 @@ export const usePortfolioStore = create<PortfolioState>()(
         set({ isLoading: true, error: null });
         let scannedTokens: { mint: string; balance: number; network: Network; symbol: string }[] = [];
 
-        const SOLANA_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
-        const BASE_RPC = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+        const SOLANA_RPC = `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_SOLANA_KEY}`;
+        const BASE_RPC = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_BASE_KEY}`;
 
         try {
           if (wallets.solana && (wallets.solana.length < 32 || wallets.solana.length > 44)) {
@@ -72,20 +77,13 @@ export const usePortfolioStore = create<PortfolioState>()(
                 body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallets.solana] })
               });
 
-              // Intercepte les erreurs d'authentification HTTP (Ex: 401 Unauthorized)
               if (!solBalanceRes.ok) {
                 const textErr = await solBalanceRes.text();
-                set({ error: `Alchemy Solana (HTTP ${solBalanceRes.status}) : Clé invalide ou app non activée pour Solana. Détails : ${textErr}`, isLoading: false });
+                set({ error: `Alchemy Solana (HTTP ${solBalanceRes.status}) : Clé Solana incorrecte. Détails : ${textErr}`, isLoading: false });
                 return;
               }
 
               const solBalanceData = await solBalanceRes.json();
-              if (solBalanceData.error) {
-                const msg = typeof solBalanceData.error === 'object' ? solBalanceData.error.message : solBalanceData.error;
-                set({ error: `Alchemy Solana RPC : ${msg}`, isLoading: false });
-                return;
-              }
-
               const lamports = solBalanceData.result?.value || 0;
               if (lamports > 0) {
                 scannedTokens.push({
@@ -131,17 +129,11 @@ export const usePortfolioStore = create<PortfolioState>()(
 
               if (!ethBalanceRes.ok) {
                 const textErr = await ethBalanceRes.text();
-                set({ error: `Alchemy Base (HTTP ${ethBalanceRes.status}) : Clé invalide ou app non activée pour Base. Détails : ${textErr}`, isLoading: false });
+                set({ error: `Alchemy Base (HTTP ${ethBalanceRes.status}) : Clé Base incorrecte. Détails : ${textErr}`, isLoading: false });
                 return;
               }
 
               const ethBalanceData = await ethBalanceRes.json();
-              if (ethBalanceData.error) {
-                const msg = typeof ethBalanceData.error === 'object' ? ethBalanceData.error.message : ethBalanceData.error;
-                set({ error: `Alchemy Base RPC : ${msg}`, isLoading: false });
-                return;
-              }
-
               if (ethBalanceData.result) {
                 const wei = parseInt(ethBalanceData.result, 16);
                 if (wei > 0) {
@@ -174,7 +166,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           }
 
           if (scannedTokens.length === 0) {
-            set({ tokens: [], isLoading: false, error: "Aucun jeton actif trouvé sur ces portefeuilles." });
+            set({ tokens: [], isLoading: false, error: "Aucun actif trouvé sur ces adresses." });
             return;
           }
 
@@ -224,7 +216,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           set({ tokens: finalTokens, isLoading: false, error: null });
 
         } catch (err) {
-          set({ error: "Erreur critique lors de la connexion aux nœuds RPC.", isLoading: false });
+          set({ error: "Erreur réseau.", isLoading: false });
         }
       },
 
