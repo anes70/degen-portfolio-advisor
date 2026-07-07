@@ -8,8 +8,7 @@ interface PortfolioState {
   isLoading: boolean;
   error: string | null;
   
-  addCustomToken: (network: Network, mintAddress: string, symbol: string, balance: number, entryPrice: number) => void;
-  removeToken: (tokenId: string) => void;
+  setWalletAddress: (network: Network, address: string) => void;
   updateEntryPrice: (tokenId: string, price: number) => void;
   refreshPortfolio: () => Promise<void>;
   clearPortfolio: () => void;
@@ -23,56 +22,11 @@ export const usePortfolioStore = create<PortfolioState>()(
       isLoading: false,
       error: null,
 
-      addCustomToken: (network, mintAddress, symbol, balance, entryPrice) => {
-        const id = `${network}-${mintAddress.toLowerCase().trim()}`;
-        const alreadyExists = get().tokens.some(t => t.id === id);
-        if (alreadyExists) return;
-
-        const newToken: Token = {
-          id,
-          name: symbol,
-          symbol: symbol.toUpperCase() || 'TOKEN',
-          mintAddress: mintAddress.trim(),
-          network,
-          balance,
-          entryPrice: entryPrice || 0,
-          marketData: {
-            currentPrice: entryPrice || 0.001,
-            volume24h: 0,
-            volumeChange1h: 0,
-            liquidity: 0,
-            ath: entryPrice || 0.001,
-            holderCount: 5000,
-            top10HolderShare: 20,
-            ageInDays: 30,
-            txCount24h: 1000,
-            githubCommits30d: 5,
-            socialSentimentScore: 75,
-            rugPullRiskScore: 10
-          }
-        };
-
+      setWalletAddress: (network, address) => {
         set((state) => ({
-          tokens: [...state.tokens, newToken],
-          wallets: { ...state.wallets, [network]: 'active' }
+          wallets: { ...state.wallets, [network]: address.trim() }
         }));
-        
         get().refreshPortfolio();
-      },
-
-      removeToken: (tokenId) => {
-        set((state) => {
-          const updatedTokens = state.tokens.filter(t => t.id !== tokenId);
-          const hasSol = updatedTokens.some(t => t.network === 'solana');
-          const hasBase = updatedTokens.some(t => t.network === 'base');
-          return {
-            tokens: updatedTokens,
-            wallets: {
-              solana: hasSol ? 'active' : '',
-              base: hasBase ? 'active' : ''
-            }
-          };
-        });
       },
 
       updateEntryPrice: (tokenId, price) => {
@@ -84,49 +38,132 @@ export const usePortfolioStore = create<PortfolioState>()(
       },
 
       refreshPortfolio: async () => {
-        const { tokens } = get();
-        if (tokens.length === 0) {
-          set({ isLoading: false });
+        const { wallets, tokens: currentTokens } = get();
+        if (!wallets.solana && !wallets.base) {
+          set({ tokens: [], error: null });
           return;
         }
 
         set({ isLoading: true, error: null });
+        let scannedTokens: { mint: string; balance: number; network: Network; symbol: string }[] = [];
 
         try {
-          const mints = tokens.map(t => t.mintAddress).join(',');
-          const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mints}`);
-          const data = await response.json();
-
-          const updatedTokens = tokens.map((token) => {
-            const pair = data.pairs?.find((p: any) => p.baseToken.address.toLowerCase() === token.mintAddress.toLowerCase());
-            
-            if (pair) {
-              return {
-                ...token,
-                name: pair.baseToken.name || token.name,
-                symbol: pair.baseToken.symbol || token.symbol,
-                marketData: {
-                  currentPrice: parseFloat(pair.priceUsd) || token.marketData.currentPrice,
-                  volume24h: pair.volume?.h24 || token.marketData.volume24h,
-                  volumeChange1h: pair.priceChange?.h1 || 0,
-                  liquidity: pair.liquidity?.usd || token.marketData.liquidity,
-                  ath: Math.max(parseFloat(pair.priceUsd) || token.marketData.ath, token.marketData.ath),
-                  holderCount: token.marketData.holderCount,
-                  top10HolderShare: token.marketData.top10HolderShare,
-                  ageInDays: token.marketData.ageInDays,
-                  txCount24h: (pair.txns?.h24?.buys + pair.txns?.h24?.sells) || token.marketData.txCount24h,
-                  githubCommits30d: token.marketData.githubCommits30d,
-                  socialSentimentScore: token.marketData.socialSentimentScore,
-                  rugPullRiskScore: token.marketData.rugPullRiskScore
+          // 1. SCAN AUTOMATIQUE SOLANA (via RPC public)
+          if (wallets.solana) {
+            try {
+              const res = await fetch('https://api.mainnet-beta.solana.com', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 1,
+                  method: 'getTokenAccountsByOwner',
+                  params: [
+                    wallets.solana,
+                    { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+                    { encoding: 'jsonParsed' }
+                  ]
+                })
+              });
+              const data = await res.json();
+              const accounts = data.result?.value || [];
+              accounts.forEach((acc: any) => {
+                const info = acc.account.data.parsed.info;
+                const balance = info.tokenAmount.uiAmount;
+                if (balance > 0) {
+                  scannedTokens.push({
+                    mint: info.mint,
+                    balance,
+                    network: 'solana',
+                    symbol: 'SOL-TOKEN'
+                  });
                 }
-              };
+              });
+            } catch (e) {
+              console.error('Erreur scan Solana:', e);
             }
-            return token;
+          }
+
+          // 2. SCAN AUTOMATIQUE BASE EVM (via API Blockscout ouverte)
+          if (wallets.base) {
+            try {
+              const res = await fetch(`https://base.blockscout.com/api/v2/addresses/${wallets.base}/token-balances`);
+              if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                  data.forEach((item: any) => {
+                    const t = item.token;
+                    if (t && t.type === 'ERC-20') {
+                      const decimals = parseInt(t.decimals) || 18;
+                      const balance = parseFloat(item.value) / Math.pow(10, decimals);
+                      if (balance > 0) {
+                        scannedTokens.push({
+                          mint: t.address,
+                          balance,
+                          network: 'base',
+                          symbol: t.symbol || 'TOKEN'
+                        });
+                      }
+                    }
+                  });
+                }
+              }
+            } catch (e) {
+              console.error('Erreur scan Base:', e);
+            }
+          }
+
+          if (scannedTokens.length === 0) {
+            set({ tokens: [], isLoading: false });
+            return;
+          }
+
+          // 3. ENRICHISSEMENT DES PRIX EN DIRECT VIA DEXSCREENER
+          const mintsList = scannedTokens.map(t => t.mint).join(',');
+          const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintsList}`);
+          const dexData = await dexRes.json();
+
+          const finalTokens: Token[] = [];
+
+          scannedTokens.forEach((scanned) => {
+            const pair = dexData.pairs?.find((p: any) => p.baseToken.address.toLowerCase() === scanned.mint.toLowerCase());
+            if (!pair) return; // Filtre les faux tokens ou poussières sans liquidité
+
+            const existing = currentTokens.find(t => t.id === `${scanned.network}-${scanned.mint.toLowerCase()}`);
+            const currentPrice = parseFloat(pair.priceUsd) || 0;
+            const entryPrice = existing ? existing.entryPrice : currentPrice;
+
+            finalTokens.push({
+              id: `${scanned.network}-${scanned.mint.toLowerCase()}`,
+              name: pair.baseToken.name || scanned.symbol,
+              symbol: pair.baseToken.symbol || scanned.symbol,
+              mintAddress: scanned.mint,
+              network: scanned.network,
+              balance: scanned.balance,
+              entryPrice,
+              marketData: {
+                currentPrice,
+                volume24h: pair.volume?.h24 || 0,
+                volumeChange1h: pair.priceChange?.h1 || 0,
+                liquidity: pair.liquidity?.usd || 0,
+                ath: Math.max(currentPrice, pair.liquidity?.usd ? currentPrice * 1.5 : currentPrice), 
+                holderCount: 15000,
+                top10HolderShare: 20,
+                ageInDays: 45,
+                txCount24h: (pair.txns?.h24?.buys + pair.txns?.h24?.sells) || 1000,
+                githubCommits30d: 0,
+                socialSentimentScore: 75,
+                rugPullRiskScore: 5
+              }
+            });
           });
 
-          set({ tokens: updatedTokens, isLoading: false });
+          // Trier du plus gros bag au plus petit en USD
+          finalTokens.sort((a, b) => (b.balance * b.marketData.currentPrice) - (a.balance * a.marketData.currentPrice));
+
+          set({ tokens: finalTokens, isLoading: false });
         } catch (err) {
-          set({ error: 'Erreur de synchronisation DexScreener', isLoading: false });
+          set({ error: 'Erreur globale lors de la synchronisation', isLoading: false });
         }
       },
 
@@ -134,6 +171,10 @@ export const usePortfolioStore = create<PortfolioState>()(
     }),
     {
       name: 'degen-portfolio-storage',
+      partialize: (state) => ({
+        wallets: state.wallets,
+        tokens: state.tokens.map(t => ({ id: t.id, entryPrice: t.entryPrice }))
+      })
     }
   )
 );
